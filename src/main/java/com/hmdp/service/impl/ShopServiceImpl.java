@@ -110,61 +110,64 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     public Shop queryWithMutex(Long id){
-        // query shop from Redis
         String key = CACHE_SHOP_KEY + id;
+        // 1. 从 Redis 查缓存
         String s = stringRedisTemplate.opsForValue().get(key);
 
-        // If found, return the shop data
+        // 2. 如果查到了，直接返回
         if (StrUtil.isNotBlank(s)) {
             return JSONUtil.toBean(s, Shop.class);
         }
 
-        // If not found, check if it is empty, query from database only if it is not empty
+        // 3. 如果查到的是空值，占位符，说明数据库中本来也没有，直接返回 null
         if (s != null) {
-            // If the value is empty, return an error message
             return null;
         }
 
+        // 4. 缓存未命中，尝试加锁
         String lockKey = LOCK_SHOP_KEY + id;
 
         try {
-
-            // rebuild the cache with mutex
-            boolean triedLock = tryLock(lockKey);
-
-            // Try to acquire a lock
-            if (!triedLock) {
-                // Sleep for a short time if lock is not acquired
+            boolean isLock = tryLock(lockKey);
+            if (!isLock) {
+                // 获取锁失败，休眠后递归重试（防止缓存击穿）
                 sleep(50);
-                return queryWithMutex(id); // Re-query to avoid cache stampede
+                return queryWithMutex(id);
             }
 
-            // If the lock is acquired successfully
-            // query from database
+            // 5. 🔁 【缓存双查】加锁成功后再次检查缓存是否已经被别的线程填充
+            String cacheAgain = stringRedisTemplate.opsForValue().get(key);
+            if (StrUtil.isNotBlank(cacheAgain)) {
+                return JSONUtil.toBean(cacheAgain, Shop.class);
+            }
+            if (cacheAgain != null) {
+                return null;
+            }
+
+            // 6. 缓存确实未命中，从数据库查
             Shop shop = getById(id);
-
-            // If found in database, cache the shop data in Redis
             if (shop != null) {
-                // Convert shop object to JSON string
-                String shopJson = JSONUtil.toJsonStr(shop);
-                // Cache the shop data in Redis with a timeout
-                stringRedisTemplate.opsForValue().set(key, shopJson, CACHE_SHOP_TTL, TimeUnit.MINUTES);
-
+                stringRedisTemplate.opsForValue().set(key,
+                        JSONUtil.toJsonStr(shop),
+                        CACHE_SHOP_TTL,
+                        TimeUnit.MINUTES);
                 return shop;
             }
-            // If not found in both Redis and database, write empty in Redis, then return an error message
-            stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
-        } catch (InterruptedException e) {
 
+            // 7. 数据库也查不到，写入空值防止缓存穿透
+            stringRedisTemplate.opsForValue().set(key,
+                    "",
+                    CACHE_NULL_TTL,
+                    TimeUnit.MINUTES);
+            return null;
+
+        } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            // Unlock the shop data in Redis
             unlock(lockKey);
         }
-
-        return null;
-
     }
+
 
     public Shop queryWithPassThrough(Long id) {
         // query shop from Redis
