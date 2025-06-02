@@ -1,6 +1,5 @@
 package com.hmdp.service.impl;
 
-import cn.hutool.captcha.generator.RandomGenerator;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.lang.UUID;
@@ -82,7 +81,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
         // save the user with Redis
         // generate UUID as a token
-        String token = UUID.randomUUID().toString(true);;
+        String token = UUID.randomUUID().toString(true);
 
         // convert to UserDTO then to Map
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
@@ -93,7 +92,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // save UserDTO to Redis with a token
         stringRedisTemplate.opsForHash().putAll(LOGIN_USER_KEY + token, userMap);
 
-        // TODO: set the token expiration time
+        // set the token expiration time
         stringRedisTemplate.expire(LOGIN_USER_KEY + token, LOGIN_USER_TTL, TimeUnit.MINUTES);
 
         return Result.ok(token);
